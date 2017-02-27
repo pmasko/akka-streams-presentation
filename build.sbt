@@ -18,5 +18,8 @@ libraryDependencies ++= Seq(
   "com.typesafe.akka" %% "akka-agent" % akkaVersion,
   "com.typesafe.akka" %% "akka-testkit" % akkaVersion % "test",
   "com.typesafe.akka" %% "akka-stream" % akkaStreamsVersion,
-  "com.typesafe.akka" %% "akka-stream-testkit" % akkaStreamsVersion % "test"
+  "com.typesafe.akka" %% "akka-stream-testkit" % akkaStreamsVersion % "test",
+  "org.scalatest"     %% "scalatest"           % "3.0.1"       % Test,
+  "com.novocode"       % "junit-interface"     % "0.11"        % Test,
+  "junit"              % "junit"               % "4.12"        % Test
 )
