@@ -4,7 +4,7 @@ import java.nio.file.Paths
 
 import akka.actor.ActorSystem
 import akka.stream.Fusing.FusedGraph
-import akka.stream.scaladsl.{Broadcast, FileIO, Flow, GraphDSL, Keep, Merge, RunnableGraph, Sink, Source}
+import akka.stream.scaladsl.{Broadcast, FileIO, Flow, Framing, GraphDSL, Keep, Merge, RunnableGraph, Sink, Source}
 import akka.stream._
 import akka.util.ByteString
 import akka.{Done, NotUsed}
@@ -40,7 +40,7 @@ class Demo1
 
   "Simple examples of akka streams" must {
 
-    "Example 1 - generate, map, filter, print some random numbers" in {
+    "Example 1: generate, map, filter, print some random numbers" in {
       val n = 100
 
       // Source object
@@ -71,7 +71,7 @@ class Demo1
         .filter(_ > 0)
         .named("PositiveRandomNumbers")
 
-    "Example 2 - generate, map, filter and materialize final value!" in {
+    "Example 2: generate, map, filter and materialize final value!" in {
       // Source of positive random numbers below 25
       val source: Source[Double, NotUsed] = positiveGaussianNumbers(100).filter(_ < 25)
 
@@ -104,14 +104,7 @@ class Demo1
       // otherwise akka will try to fuse steps and execute them on a single actor to spare on data transfer cost (since v2.0)
 
       val asyncSource: Source[Double, NotUsed] = positiveGaussianNumbers(100).async
-      val sink = Sink.onComplete[Int] {
-        case scala.util.Success(s) =>
-          println(s"The stream from example 3 completed with number of elements: $s")
-        case scala.util.Failure(e) =>
-          println(s"Failed example 3: $e")
-      }
-
-      val trueSink: Sink[Double, Future[Int]] = Sink.fold(0){ case (acc, v) =>  println(s"Processing: $acc"); acc +  1 }
+      val sink: Sink[Double, Future[Int]] = Sink.fold(0){ case (acc, v) =>  println(s"Processing: $acc"); acc +  1 }
 
       val graph = RunnableGraph.fromGraph(GraphDSL.create() { implicit b =>
         import GraphDSL.Implicits._
@@ -124,7 +117,7 @@ class Demo1
         asyncSource ~> bcast.in
 
         // negate and throttle and send to sink
-        bcast.out(0) ~> Flow[Double].map(_ * -1.0) ~> merge ~> trueSink
+        bcast.out(0) ~> Flow[Double].map(_ * -1.0) ~> merge ~> sink
         bcast.out(1) ~> Flow[Double].sliding(10) ~>
           Flow[Seq[Double]].map { vals =>
             val v = vals.sum
@@ -134,6 +127,13 @@ class Demo1
         ClosedShape
       })
       graph.run()
+    }
+
+    "Example 4: grouping and concatenating" in {
+      val text = """In the previous section we explored the possibility of composition, and hierarchy, but we stayed away from non-linear, generalized graph components. There is nothing in Akka Streams though that enforces that stream processing layouts can only be linear. The DSL for Source and friends is optimized for creating such linear chains, as they are the most common in practice. There is a more advanced DSL for building complex graphs, that can be used if more flexibility is needed. We will see that the difference between the two DSLs is only on the surface: the concepts they operate on are uniform across all DSLs and fit together nicely."""
+      //http://doc.akka.io/docs/akka/2.4.17/scala/stream/stream-rate.html
+      //http://doc.akka.io/docs/akka/2.4.17/scala/stream/stream-parallelism.html
+      //http://doc.akka.io/docs/akka/2.4.17/scala/stream/stream-graphs.html#graph-matvalue-scala
     }
 
     def lineSink(filename: String): Sink[String, Future[IOResult]] =
