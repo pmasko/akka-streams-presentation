@@ -1,13 +1,10 @@
 package net.so1.demo.akka.streams
 
-import java.nio.file.Paths
-
-import akka.actor.ActorSystem
-import akka.stream.Fusing.FusedGraph
-import akka.stream.scaladsl.{Broadcast, FileIO, Flow, Framing, GraphDSL, Keep, Merge, RunnableGraph, Sink, Source}
+import akka.actor.{ActorRef, ActorSystem}
 import akka.stream._
-import akka.util.ByteString
+import akka.stream.scaladsl.{Broadcast, Flow, GraphDSL, Keep, Merge, RunnableGraph, Sink, Source}
 import akka.{Done, NotUsed}
+import org.reactivestreams.{Subscriber, Subscription}
 import org.scalatest._
 import org.scalatest.concurrent.ScalaFutures
 
@@ -26,8 +23,13 @@ class Demo1
 
   implicit val system = ActorSystem()
 
+
   // runs transformation steps on actors and its thread pool - @see MaterializationSettings
-  implicit val mat = ActorMaterializer()
+  implicit val mat = ActorMaterializer(
+    // set async stage buffer size
+    ActorMaterializerSettings(system).withInputBuffer(initialSize = 64, maxSize = 64)
+  )
+
   // allows to use is ready within and whenReady {}
   implicit val defaultPatience = PatienceConfig(timeout = 2.seconds, interval = 50.millis)
 
@@ -35,7 +37,7 @@ class Demo1
 
   override def afterEach(): Unit = {}
 
-  override def afterAll(): Unit = Await.result(system.terminate(), 5.seconds)
+  override def afterAll(): Unit = Await.result(system.terminate(), 20.seconds)
 
 
   "Simple examples of akka streams" must {
@@ -124,21 +126,67 @@ class Demo1
             println(v)
             v
           } ~> merge
+
         ClosedShape
       })
       graph.run()
     }
 
-    "Example 4: grouping and concatenating" in {
+    "Example 4: integration with actors, reactive streams and async processing" in {
       val text = """In the previous section we explored the possibility of composition, and hierarchy, but we stayed away from non-linear, generalized graph components. There is nothing in Akka Streams though that enforces that stream processing layouts can only be linear. The DSL for Source and friends is optimized for creating such linear chains, as they are the most common in practice. There is a more advanced DSL for building complex graphs, that can be used if more flexibility is needed. We will see that the difference between the two DSLs is only on the surface: the concepts they operate on are uniform across all DSLs and fit together nicely."""
-      //http://doc.akka.io/docs/akka/2.4.17/scala/stream/stream-rate.html
-      //http://doc.akka.io/docs/akka/2.4.17/scala/stream/stream-parallelism.html
-      //http://doc.akka.io/docs/akka/2.4.17/scala/stream/stream-graphs.html#graph-matvalue-scala
+
+      implicit val executionContext = system.dispatcher
+
+      val sinkSubscriber = Sink.fromSubscriber(new Subscriber[(BigDecimal, String)] {
+        var subscription: Subscription = _
+
+        override def onError(t: Throwable): Unit = println(s"Error ?: $t")
+
+        override def onSubscribe(s: Subscription): Unit = {
+          println("Got subscription object")
+          subscription = s
+          subscription.request(100)
+        }
+
+        override def onComplete(): Unit = {
+          println("Stream completed for Example 4")
+        }
+
+        override def onNext(t: (BigDecimal, String)): Unit = {
+          println(s"Got new data value=${t._1} word: ${t._2}")
+          subscription.request(1)
+        }
+      })
+
+      val sourceRef: Source[String, ActorRef] = Source.actorRef[String](5, OverflowStrategy.dropHead)
+      // Second type is materialized value
+      val asyncWordsSource: Source[String, ActorRef] =
+          sourceRef
+            .map(_.split("\\s").toList)
+          .mapConcat(identity) // flatMap List[List[String]] => List[String]
+            .map(_.trim)
+          .async
+
+      val graph = asyncWordsSource
+        .mapAsync(2) { word: String =>
+          slowDBQuery(word).map { v =>
+            (v, word)
+          }
+        }
+        .withAttributes(ActorAttributes.supervisionStrategy(Supervision.resumingDecider))
+        .toMat(sinkSubscriber)(Keep.left)
+
+      // run graph and materialize the lefmost value i.e ActorRef which accepts string as a parameter.
+      graph.run() ! text
+      Thread.sleep(10000)
     }
 
-    def lineSink(filename: String): Sink[String, Future[IOResult]] =
-      Flow[String]
-        .map(s => ByteString(s + "\n"))
-        .toMat(FileIO.toPath(Paths.get(filename)))(Keep.right)
+    def slowDBQuery(word: String) : Future[BigDecimal] = {
+      Future.successful {
+        Thread.sleep(50 * word.length)
+        Random.nextGaussian()
+      }
+    }
+
   }
 }
