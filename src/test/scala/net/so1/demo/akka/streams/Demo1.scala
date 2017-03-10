@@ -1,6 +1,6 @@
 package net.so1.demo.akka.streams
 
-import akka.actor.{ActorRef, ActorSystem}
+import akka.actor.{ActorRef, ActorSystem, Cancellable}
 import akka.stream._
 import akka.stream.scaladsl.{Broadcast, Flow, GraphDSL, Keep, Merge, RunnableGraph, Sink, Source}
 import akka.{Done, NotUsed}
@@ -11,7 +11,7 @@ import org.scalatest.concurrent.ScalaFutures
 import scala.collection.immutable.Seq
 import scala.concurrent._
 import scala.concurrent.duration._
-import scala.util.Random
+import scala.util.{Random, Try}
 
 
 class Demo1
@@ -32,6 +32,7 @@ class Demo1
 
   // allows to use is ready within and whenReady {}
   implicit val defaultPatience = PatienceConfig(timeout = 2.seconds, interval = 50.millis)
+  implicit val ec = system.dispatcher
 
   override def beforeEach(): Unit = {}
 
@@ -135,8 +136,6 @@ class Demo1
     "Example 4: integration with actors, reactive streams and async processing" in {
       val text = """In the previous section we explored the possibility of composition, and hierarchy, but we stayed away from non-linear, generalized graph components. There is nothing in Akka Streams though that enforces that stream processing layouts can only be linear. The DSL for Source and friends is optimized for creating such linear chains, as they are the most common in practice. There is a more advanced DSL for building complex graphs, that can be used if more flexibility is needed. We will see that the difference between the two DSLs is only on the surface: the concepts they operate on are uniform across all DSLs and fit together nicely."""
 
-      implicit val executionContext = system.dispatcher
-
       val sinkSubscriber = Sink.fromSubscriber(new Subscriber[(BigDecimal, String)] {
         var subscription: Subscription = _
 
@@ -176,9 +175,47 @@ class Demo1
         .withAttributes(ActorAttributes.supervisionStrategy(Supervision.resumingDecider))
         .toMat(sinkSubscriber)(Keep.left)
 
-      // run graph and materialize the lefmost value i.e ActorRef which accepts string as a parameter.
+      // run graph and materialize the left most value i.e ActorRef which accepts string as a parameter.
       graph.run() ! text
       Thread.sleep(10000)
+    }
+
+    "Example 5: Group upstream data in batches with timeout" in {
+      val eventsSource: Source[Int, Cancellable] =
+        Source.tick(20.millis, 120.millis, 1)
+          .map { e => println(e); e }.async
+
+      val graph = eventsSource
+        .map { e => Thread.sleep(10 + Random.nextInt(200)); e }.async // slow down the source and add jitter
+        .groupedWithin(10, 1.second)
+        .runForeach { el =>
+          println(s"Data: #=${el.size} $el")
+        }
+
+      Try(Await.ready(graph, 20.second))
+    }
+
+
+    "Example 6: Merge upstream data when downstream is slower" in {
+      val eventsSource: Source[Int, Cancellable] =
+        Source.tick(20.millis, 120.millis, 1)
+          .map { e => println(e); e }.async
+
+      val graph = eventsSource
+        .conflate(_ + _)
+        .mapAsync(1) { e =>
+          Future {
+            val sleepTime = 100 + Random.nextInt(200)
+            //          println(s"Sleeping for $sleepTime")
+            Thread.sleep(sleepTime);
+            e
+          }
+        } // slow down the source and add jitter
+        .runForeach { el =>
+        println(s"Got result = $el")
+      }
+
+      Try(Await.ready(graph, 20.second))
     }
 
     def slowDBQuery(word: String) : Future[BigDecimal] = {

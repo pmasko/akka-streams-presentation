@@ -45,18 +45,6 @@ class Demo3
     //https://softwaremill.com/windowing-in-big-data-streams-spark-flink-kafka-akka/
     //https://softwaremill.com/windowing-data-in-akka-streams/
 
-    "Example 1: Conflate fast source data" in {
-      val graph = eventsSource.async
-        .groupedWithin(1000,
-        .async
-        .runForeach { el =>
-          Thread.sleep(1000L)
-          println(el)
-          storeBachOfData(el)
-        }
-
-      Try(Await.ready(graph, 20.second))
-    }
 
   }
 }
