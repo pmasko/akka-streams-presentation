@@ -20,16 +20,16 @@ class Demo2
     with BeforeAndAfterAll
     with Matchers {
 
-  implicit val system = ActorSystem("demo2")
-  implicit val ec = system.dispatcher
+  implicit val system: ActorSystem = ActorSystem("demo2")
+  implicit val ec: ExecutionContextExecutor = system.dispatcher
   // runs transformation steps on actors and its thread pool - @see MaterializationSettings
-  implicit val mat = ActorMaterializer(
+  implicit val mat: ActorMaterializer = ActorMaterializer(
     // set async stage buffer size
     ActorMaterializerSettings(system).withInputBuffer(initialSize = 64, maxSize = 64)
   )
 
   // allows to use is ready within and whenReady {}
-  implicit val defaultPatience = PatienceConfig(timeout = 2.seconds, interval = 50.millis)
+  implicit val defaultPatience: PatienceConfig = PatienceConfig(timeout = 2.seconds, interval = 50.millis)
 
   override def beforeEach(): Unit = {}
 
@@ -99,13 +99,14 @@ class Demo2
     "Sample 1: Throttle async HTTP calls and split to substreams" in {
       val fileNames = Seq("RTI_requests1.xml", "RTI_requests2.xml")
       val parallelism = 2
+      val maxItemsToGroup = 100000
 
       val graph = Source(fileNames)
-        .mapAsyncUnordered(parallelism)(fileName => startProcessingFile(fileName))
+        .mapAsync(parallelism)(fileName => startProcessingFile(fileName))
         .withAttributes(ActorAttributes.supervisionStrategy(Supervision.resumingDecider))
         .mapConcat(s => splitFileContentToHttpRequest(s.fileName, s.content))
         .throttle(10, 1.second, 10, ThrottleMode.shaping)
-        .buffer(2, OverflowStrategy.backpressure )
+        .buffer(2, OverflowStrategy.backpressure)
         .mapAsyncUnordered(parallelism) { case FileWithContent(file, line) =>
           // HTTP call
           callHttpService(file, line).map { resp =>
@@ -113,19 +114,19 @@ class Demo2
           }
         }
         //.withAttributes(ActorAttributes.withSupervisionStrategy(rtiExceptionDecider))
-        .groupBy(10000, _.fileName)
-        .fold(List.empty[FileWithResponse]) { case (a, v) => v :: a }
-        .collect { case responseList if responseList.nonEmpty =>
-          val fileName: String = responseList.head.fileName
-          checkIfFailure(responseList) match {
-            case "OK" =>
-              println(s"File processed OK: $fileName")
-            case _ =>
-              println(s"File not proceed $fileName!")
+        .groupBy(maxItemsToGroup, _.fileName)
+          .fold(List.empty[FileWithResponse]) { case (a, v) => v :: a }
+          .collect { case responseList if responseList.nonEmpty =>
+            val fileName: String = responseList.head.fileName
+            checkIfFailure(responseList) match {
+              case "OK" =>
+                println(s"File processed OK: $fileName")
+              case _ =>
+                println(s"File not proceed $fileName!")
+            }
           }
-        }
-        .async
-        .mergeSubstreams
+          .async
+          .mergeSubstreams
         .toMat(Sink.last[Unit])(Keep.right) // force return of last result wrapped in future
 
       // Await for graph end

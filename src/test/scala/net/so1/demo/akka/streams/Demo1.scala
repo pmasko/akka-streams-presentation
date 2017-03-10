@@ -67,12 +67,19 @@ class Demo1
     }
 
 
-    // we can resuse the flow
+    // we can re-use the flow
     def positiveGaussianNumbers(numGenerated: Int): Source[Double, NotUsed] =
       Source(1 to numGenerated)
         .map(_ * Random.nextGaussian())
         .filter(_ > 0)
         .named("PositiveRandomNumbers")
+
+    def slowDBQuery(word: String) : Future[BigDecimal] = {
+      Future.successful {
+        Thread.sleep(50 * word.length)
+        Random.nextGaussian()
+      }
+    }
 
     "Example 2: generate, map, filter and materialize final value!" in {
       // Source of positive random numbers below 25
@@ -180,12 +187,15 @@ class Demo1
       Thread.sleep(10000)
     }
 
-    "Example 5: Group upstream data in batches with timeout" in {
-      val eventsSource: Source[Int, Cancellable] =
+    val eventsSource: Source[Int, Cancellable] =
         Source.tick(20.millis, 120.millis, 1)
-          .map { e => println(e); e }.async
+          .map { e => println(e); e }
+          .async
 
-      val graph = eventsSource
+    "Example 5: Group upstream data in batches with timeout" in {
+
+      val graph =
+        eventsSource
         .map { e => Thread.sleep(10 + Random.nextInt(200)); e }.async // slow down the source and add jitter
         .groupedWithin(10, 1.second)
         .runForeach { el =>
@@ -197,33 +207,24 @@ class Demo1
 
 
     "Example 6: Merge upstream data when downstream is slower" in {
-      val eventsSource: Source[Int, Cancellable] =
-        Source.tick(20.millis, 120.millis, 1)
-          .map { e => println(e); e }.async
-
-      val graph = eventsSource
-        .conflate(_ + _)
-        .mapAsync(1) { e =>
-          Future {
-            val sleepTime = 100 + Random.nextInt(200)
-            //          println(s"Sleeping for $sleepTime")
-            Thread.sleep(sleepTime);
-            e
+      val graph =
+        eventsSource
+          .conflate(_ + _)
+          .mapAsync(1) { e =>
+            Future {
+              val sleepTime = 100 + Random.nextInt(200)
+              Thread.sleep(sleepTime)
+              e
+            }
           }
-        } // slow down the source and add jitter
-        .runForeach { el =>
-        println(s"Got result = $el")
-      }
+          .runForeach { el =>
+            println(s"Got result = $el")
+          }
 
       Try(Await.ready(graph, 20.second))
     }
 
-    def slowDBQuery(word: String) : Future[BigDecimal] = {
-      Future.successful {
-        Thread.sleep(50 * word.length)
-        Random.nextGaussian()
-      }
-    }
+
 
   }
 }
